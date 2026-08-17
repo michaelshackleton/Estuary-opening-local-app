@@ -7,11 +7,11 @@ the inside/outside lines (and optional structures), pick a date range and
 cloud-cover threshold, and get an open/closed/indeterminate time series for
 the estuary mouth, sourced live from Digital Earth Australia.
 
-Nothing outside this `Claude_script/` folder is modified - `src/`,
+Nothing outside this `Estuary openings local app/` folder is modified - `src/`,
 `res/products.json`, existing `data/` and notebooks were only ever read
 from, never edited. **This folder is now fully self-contained** - the
 handful of files it needs from `src/` are vendored into `vendor/` (see
-`vendor/README.md`), so `Claude_script` can be copied or moved to any
+`vendor/README.md`), so `Estuary openings local app` can be copied or moved to any
 drive or machine and will still run, with one catch (below).
 
 ## Setup (one-off)
@@ -44,7 +44,7 @@ see file-locking errors, that's the first thing to suspect.
 Double-click `run_app.bat`, or from an activated environment:
 
 ```
-cd Claude_script
+cd "Estuary openings local app"
 streamlit run app.py
 ```
 
