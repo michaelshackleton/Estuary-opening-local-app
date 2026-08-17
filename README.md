@@ -1,23 +1,28 @@
-# Estuary Mouth Monitor
+# Estuary Mouth Monitor (local desktop app)
 
-A Streamlit app that combines the two existing pipelines in this repo
-(`Estuary openings multi folders.r` and the DEA download notebook in
-`notebooks/`) into one interface: draw a region on a satellite map, define
-the inside/outside lines (and optional structures), pick a date range and
-cloud-cover threshold, and get an open/closed/indeterminate time series for
-the estuary mouth, sourced live from Digital Earth Australia.
+Detects whether an estuary mouth is open or closed using satellite
+imagery, and lets you view and analyse how often it closes over time.
+Draw a region around the mouth, define the inside/outside lines (and
+optional structures), pick a date range and cloud-cover threshold, and get
+an open/closed/indeterminate time series sourced live from Digital Earth
+Australia.
 
-Nothing outside this `Claude_script/` folder is modified - `src/`,
-`res/products.json`, existing `data/` and notebooks were only ever read
-from, never edited. **This folder is now fully self-contained** - the
-handful of files it needs from `src/` are vendored into `vendor/` (see
-`vendor/README.md`), so `Claude_script` can be copied or moved to any
-drive or machine and will still run, with one catch (below).
+This is the local, run-on-your-own-machine counterpart to the hosted
+version at [estuary-openings.streamlit.app](https://estuary-openings.streamlit.app) -
+same map, same classification logic, same data source. The difference is
+just where things are stored: this version saves site layers and cached
+rasters to folders on your own computer via native Windows dialogs,
+instead of through browser upload/download, and isn't limited by a shared
+server's memory.
+
+This app is fully self-contained - all the code it depends on is vendored
+into `vendor/` (see `vendor/README.md`), so it can be copied or moved to
+any drive or machine and will still run, with one catch (below).
 
 ## Setup (one-off)
 
 ```
-cd Claude_script
+cd "Estuary openings local app"
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -44,46 +49,43 @@ see file-locking errors, that's the first thing to suspect.
 Double-click `run_app.bat`, or from an activated environment:
 
 ```
-cd Claude_script
+cd "Estuary openings local app"
 streamlit run app.py
 ```
 
 This opens the app in your browser. It runs entirely locally - no data
 leaves your machine except the STAC/raster requests to Digital Earth
-Australia's own servers (the same ones the existing notebook already
-talks to).
+Australia's own servers.
 
 ## Folder layout
 
 - `app.py` - the Streamlit UI (map + draw tools + run controls + results).
-- `modules/connectivity.py` - Python port of the R script's NDWI/oa_fmask
-  water-masking and path-connectivity logic. Framework-independent -
-  no Streamlit or STAC code in here, so it can be unit tested on its own.
+- `modules/connectivity.py` - the NDWI/oa_fmask water-masking and
+  path-connectivity logic. Framework-independent - no Streamlit or STAC
+  code in here, so it can be unit tested on its own.
 - `modules/region.py` - manages the drawn ROI/lines/structures layers,
   including saving/loading them as Esri Shapefiles (`roi.shp`, `lines.shp`,
-  `structures.shp` - the same format the R script reads) so an analysis can
-  be reproduced later without redrawing. Saving creates a subfolder named
-  after the site (whatever you typed in "Site name") under whichever parent
-  folder you pick via the sidebar's "Browse" button, so multiple sites
-  stay separated and easy to find under one shared parent folder. Loading
-  just points back at that site's own subfolder.
+  `structures.shp`) so an analysis can be reproduced later without
+  redrawing. Saving creates a subfolder named after the site (whatever you
+  typed in "Site name") under whichever parent folder you pick via the
+  sidebar's "Browse" button, so multiple sites stay separated and easy to
+  find under one shared parent folder. Loading just points back at that
+  site's own subfolder.
 - `modules/fetch.py` - queries DEA's STAC catalogue and loads scenes for the
-  drawn ROI, reusing the vendored `vendor/rs_data.py` and
-  `vendor/rs_processing.py` rather than duplicating that logic. Can cache
-  fetched scenes as GeoTIFFs under `data_cache/` (created on first run), but
-  does not by default - see "Raster caching is opt-in" below.
-- `vendor/` - self-contained copies of the `src/` files this app depends on
-  (see `vendor/README.md`), so this folder doesn't need the rest of
-  `rs-utils-main` alongside it to run.
+  drawn ROI, using the vendored `vendor/rs_data.py` and
+  `vendor/rs_processing.py`. Can cache fetched scenes as GeoTIFFs under
+  `data_cache/` (created on first run), but does not by default - see
+  "Raster caching is opt-in" below.
+- `vendor/` - self-contained copies of the code this app depends on (see
+  `vendor/README.md`), so this folder doesn't need anything else alongside
+  it to run.
 - `modules/aggregate.py` - builds the results table, prefers Sentinel-2 over
   Landsat on shared dates, and computes the mean-monthly proportion-closed
-  statistic (equal-weighted across calendar months, matching the R script's
-  approach to correcting for uneven survey frequency).
-- `config/products.json` - two DEA product definitions built for this app:
+  statistic (equal-weighted across calendar months, to correct for uneven
+  survey frequency).
+- `config/products.json` - two DEA product definitions used by this app:
   `landsat_full` (Landsat 5/7/8/9, 30 m) and `sentinel_full` (Sentinel-2,
-  10 m). The original `res/products.json` has `ls0` (Landsat 5/7/8 only, no
-  9) and no single product spanning the full Landsat archive, so these are
-  new entries rather than edits to the original file.
+  10 m), each spanning the full available archive for that sensor.
 - `data_cache/` - cached rasters per site/sensor/date (created on first run,
   fixed location - unlike the site shapefiles, this is just a working cache
   rather than something you'd want to file away by hand).
@@ -115,13 +117,10 @@ in the results table if you want to check them.
 
 **Scene preview instead of a true georeferenced map overlay.** "Click a
 point, see the raster" is implemented as an NDWI heatmap with the
-inside/outside lines overlaid in the correct pixel positions - not (yet) a
-reprojected image layered back onto the satellite basemap. This was a
-deliberate scope trade-off: a real georeferenced overlay needs careful
-reprojection/bounds handling that I couldn't verify without being able to
-run the app myself this session (see below). The current version is enough
-to sanity-check that a given date's classification looks right; say the
-word if you'd like it upgraded to sit on the actual map.
+inside/outside lines overlaid in the correct pixel positions - not a
+reprojected image layered back onto the satellite basemap. This is enough
+to sanity-check that a given date's classification looks right, without
+the extra reprojection/bounds handling a full map overlay would need.
 
 **Scenes must (by default) fully cover the drawn ROI.** Before analysing,
 scenes are filtered to those covering >= 99.9% of the ROI polygon (via
@@ -131,14 +130,12 @@ swath - these otherwise just leave part of the ROI as nodata and usually
 come out indeterminate anyway. This can be turned off with the checkbox on
 the run tab if you'd rather see every scene regardless of coverage.
 
-**Cloud-cover filter is scene-level, not ROI-level.** `eo:cloud_cover`
-(used here) is the whole-scene's cloud percentage, same as the existing
-notebook's basic filter - not the percentage over just your drawn ROI.
-`rs_data.py` has a more precise `filter_stac_items_fmask_qa` for
-region-specific cloud cover; I kept the simpler scene-level filter for this
-first version since it's the path already exercised in the existing
-notebook, but that's an easy upgrade later if scene-level cloud cover is
-letting through too many locally-cloudy images.
+**Cloud-cover filter is scene-level, not ROI-level.** `eo:cloud_cover` is the
+whole-scene's cloud percentage, not the percentage over just your drawn
+ROI. A scene can pass this filter while still being locally cloudy over
+your specific region - the "indeterminate" classification and the
+cloud/no-data mask overlay in the scene preview are there to catch that
+case.
 
 **Confirmed layers show a persistent state.** Each of the region/lines/
 structures tabs now switches to a read-only "confirmed" view (with a
@@ -176,65 +173,30 @@ diagnostic" checkbox recomputes the chosen scene's NDWI or fmask check live
 and shows exactly which patches the *optimistic* pass (cloud/no-data
 assumed water) found reaching the inside line, the outside line, or both.
 If a result looks surprising (e.g. "closed" on a heavily clouded scene),
-this shows the actual computation rather than requiring an eyeball
-judgement from the raster image - if a "reaches both" patch shows up but
-the status still says closed, that's a genuine bug worth reporting back.
+this shows the actual computation behind it rather than requiring an
+eyeball judgement from the raster image alone.
 
 **Duplicate same-date tiles are resolved by picking the better-covered one.**
 A single calendar date can have more than one DEA STAC item - most often two
 adjacent tiles from the same overpass, captured a few seconds apart with
-distinct timestamps, where the ROI happens to sit near the tile boundary. If
-both were kept as separate rows, the one with (near-)zero real coverage
-could end up in the final results table or scene preview instead of the
-good one, entirely by chance of row ordering - this was a real bug, not
-hypothetical (confirmed via a scene that fetched fine at the full-run stage
-but came back 0% valid pixels when re-fetched on demand for preview). Both
-`run_site_analysis()` and `fetch_single_scene()` now keep only the
+distinct timestamps, where the ROI happens to sit near the tile boundary.
+Both `run_site_analysis()` and `fetch_single_scene()` keep only the
 best-covered scene per date (fewest no-data cells / highest valid-pixel
-fraction) when this happens.
+fraction) when this happens, so a near-empty tile can't end up in the
+results table or scene preview in place of the good one.
 
 **On-demand scene fetch only accepts an exact date match.** If DEA has no
 item exactly on the requested date even after widening the search by a day
-either side, `fetch_single_scene()` now raises a clear error rather than
-silently falling back to whatever the nearest returned scene happened to be
-- the earlier version of this fallback could pick a different, barely-
-overlapping tile on a neighbouring date and render it as if it were the
-requested scene, showing up as a preview that's almost entirely grey
-(no-data) with no explanation. If you see this error, please report the
-date/site - it likely means a small tolerance adjustment is needed for a
-timezone/date-boundary edge case.
+either side, `fetch_single_scene()` raises a clear error rather than
+silently falling back to whatever the nearest returned scene happened to
+be - this avoids rendering a preview from a different, barely-overlapping
+tile on a neighbouring date, which would otherwise show up as an
+unexplained, mostly-grey (no-data) image. This error is rare and usually
+points to a timezone/date-boundary edge case right around midnight UTC.
 
-**A real bug in the existing pipeline was avoided, not fixed.** The
-DEA-download notebook's last cell (`stac_ds_to_product(...)` writing to
-`.rio.to_raster()`) throws "Only 2D and 3D data arrays supported" on every
-scene. `fetch.py` never calls that path - it computes the clipped,
-processed xarray Dataset directly and writes its own GeoTIFFs band-by-band,
-which sidesteps the bug rather than fixing whatever's wrong in the
-original `stac_ds_to_product`/rioxarray interaction.
-
-## What I could not verify this session
-
-The sandbox this was built in cannot currently run Python (a Windows/Hyper-V
-permission issue was blocking it - see earlier in this conversation for the
-fix). That means none of this has been executed yet. The parts most likely
-to need small fixes once you actually run it:
-
-- **streamlit-folium's drawing state.** The three-tab draw workflow (region
-  -> lines -> structures) assumes `st_folium(...)["all_drawings"]` behaves
-  as documented across reruns. This is a well-worn pattern but I have not
-  been able to click through it myself.
-- **The Plotly click-to-select API** (`st.plotly_chart(..., on_select="rerun")`
-  and reading `event["selection"]["points"]`) needs Streamlit >= 1.35 -
-  double-check your installed version if clicking a point doesn't do
-  anything.
-- **The folder-browse buttons** open a native Windows folder dialog via
-  `tkinter` (bundled with standard Python installs). If it doesn't appear,
-  or errors about `tkinter` missing, just type/paste the folder path into
-  the text box instead - the Browse button is a convenience, not required.
-- **DEA's STAC endpoint** - `rs_data.py` points at
-  `https://explorer.sandbox.dea.ga.gov.au/stac`, matching what the existing
-  notebook uses; if that sandbox endpoint has changed or requires
-  auth now, `get_stac_items` will need a small update.
-
-If you hit an error, paste it back and I'll fix it directly - much faster
-than me guessing further without being able to run it.
+**GeoTIFFs are written directly rather than through a shared helper.**
+`fetch.py` computes the clipped, processed data for each scene and writes
+its own GeoTIFFs band-by-band, rather than relying on a generic
+xarray-to-raster conversion step. This keeps scene writing self-contained
+and avoids assumptions about array shape that a more generic helper would
+need to handle.

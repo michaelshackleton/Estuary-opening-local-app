@@ -9,9 +9,9 @@ It runs entirely on your own computer as a local web app — no data is uploaded
 You'll need Python installed on the computer (3.10 or newer). To check, open Command Prompt and type `python --version`.
 
 1. Open Command Prompt (search for "cmd" in the Start menu).
-2. Navigate to the app folder. If it was saved to, for example, `C:\Users\YourName\Documents\rs-utils-main\Claude_script`, type:
+2. Navigate to the app folder. If it was saved to, for example, `C:\Users\YourName\Documents\Estuary_openings_local_app`, type:
    ```
-   cd "C:\Users\YourName\Documents\rs-utils-main\Claude_script"
+   cd "C:\Users\YourName\Documents\Estuary_openings_local_app"
    ```
 3. Create a Python environment just for this app (keeps its packages separate from anything else on the computer):
    ```
@@ -94,11 +94,11 @@ Rather than redrawing everything each time, you can save your region/lines/struc
 - **Save**: enter a site name in the sidebar, choose (or type) a parent folder using the **Browse** button next to "Parent folder", then click **Save current site layers**. This creates a subfolder named after your site inside that parent folder, so multiple sites stay organised together.
 - **Load**: browse to that site's own subfolder using the **Browse** button next to "Load folder", then click **Load site layers**.
 
-These are saved as standard Esri Shapefiles, so they can also be opened directly in GIS software or the original R script if needed.
+These are saved as standard Esri Shapefiles, so they can also be opened directly in GIS software if needed.
 
 ## Troubleshooting
 
 - **The app won't start / errors about a missing module**: make sure you activated the environment first (`.venv\Scripts\activate`) before running anything manually, or just use `run_app.bat`, which does this automatically. If it names a specific missing package, run `pip install <package name>` with the environment activated.
 - **A folder-browse button doesn't open anything**: type the folder path directly into the text box next to it instead — the Browse button is just a shortcut.
 - **A run is taking a long time**: larger regions and longer date ranges naturally take longer. Narrowing the region to just the estuary mouth, shortening the date range, or lowering the cloud-cover threshold will speed things up.
-- **Anything else**: note the exact error message shown on screen — that's the fastest way to get it fixed.
+- **Anything else**: note the exact error message shown on screen, which usually points to the cause.
