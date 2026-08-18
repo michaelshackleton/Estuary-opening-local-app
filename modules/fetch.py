@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import shutil
 import sys
 import tempfile
+import time
 from typing import Callable, Optional
 
 import numpy as np
@@ -63,6 +65,21 @@ FULL_COVERAGE_THRESHOLD = 0.999
 # auto-detection) and error rows (which never reach that auto-detection).
 PRODUCT_SENSOR_LABEL = {"landsat_full": "landsat", "sentinel_full": "sentinel2"}
 SENSOR_PRODUCT = {v: k for k, v in PRODUCT_SENSOR_LABEL.items()}
+
+# STACDataManager.get_stac_items() (vendored, in rs_data.py) runs a single
+# STAC search across the whole requested date range and eagerly pages
+# through every matching item before returning - for a multi-decade range
+# (e.g. the full 1985-present Landsat archive) that can mean dozens of
+# sequential page requests to DEA's STAC API with no retry logic at all, so
+# a single transient server error (a gateway timeout, a brief 5xx, a rate
+# limit) on any one page kills the entire search. _search_stac_items()
+# below works around this by splitting the search into chunks of at most
+# this many years, and retrying each chunk's search independently on
+# failure - a much smaller, faster query is both less likely to trip a
+# server-side timeout in the first place, and cheap to redo if it does.
+STAC_SEARCH_CHUNK_YEARS = 5
+STAC_SEARCH_MAX_ATTEMPTS = 4
+STAC_SEARCH_RETRY_BASE_DELAY = 5.0  # seconds; doubles each retry, plus jitter
 
 
 class InMemoryRegionManager:
@@ -180,6 +197,65 @@ def load_cached_temporal_reference(
     return reference
 
 
+def _date_range_chunks(start_date: str, end_date: str, chunk_years: int) -> list[tuple[str, str]]:
+    """Splits [start_date, end_date] into consecutive (chunk_start,
+    chunk_end) string pairs spanning at most `chunk_years` each."""
+    start = pd.Timestamp(start_date)
+    end = pd.Timestamp(end_date)
+    if chunk_years <= 0 or start + pd.DateOffset(years=chunk_years) > end:
+        return [(start_date, end_date)]
+    chunks: list[tuple[str, str]] = []
+    cur = start
+    while cur <= end:
+        chunk_end = min(cur + pd.DateOffset(years=chunk_years) - pd.Timedelta(days=1), end)
+        chunks.append((cur.strftime("%Y-%m-%d"), chunk_end.strftime("%Y-%m-%d")))
+        cur = chunk_end + pd.Timedelta(days=1)
+    return chunks
+
+
+def _search_stac_items(
+    stac_mgr, start_date: str, end_date: str, product_mgr, region_mgr,
+    progress_cb: ProgressCB = None, product_code: str = "",
+) -> list:
+    """Fetches STAC items for [start_date, end_date] via
+    stac_mgr.get_stac_items(), but split into STAC_SEARCH_CHUNK_YEARS-sized
+    chunks and with retries (exponential backoff) on each chunk - see
+    STAC_SEARCH_CHUNK_YEARS's docstring above for why. Raises a clear
+    RuntimeError naming the failed chunk and product if a chunk still fails
+    after STAC_SEARCH_MAX_ATTEMPTS attempts, rather than letting a bare
+    APIError/connection-error traceback surface."""
+    chunks = _date_range_chunks(start_date, end_date, STAC_SEARCH_CHUNK_YEARS)
+    all_items: list = []
+    for c_idx, (chunk_start, chunk_end) in enumerate(chunks):
+        last_exc: Optional[Exception] = None
+        for attempt in range(STAC_SEARCH_MAX_ATTEMPTS):
+            try:
+                if progress_cb:
+                    label = f"Searching {product_code} scenes ({chunk_start} to {chunk_end}"
+                    label += f", {c_idx + 1}/{len(chunks)}" if len(chunks) > 1 else ""
+                    label += f", retry {attempt}/{STAC_SEARCH_MAX_ATTEMPTS - 1}" if attempt else ""
+                    label += ")..."
+                    progress_cb(0, 1, label)
+                items = stac_mgr.get_stac_items(chunk_start, chunk_end, product_mgr, region_mgr)
+                all_items.extend(items)
+                last_exc = None
+                break
+            except Exception as e:  # noqa: BLE001 - deliberately broad: retry any transient search failure
+                last_exc = e
+                if attempt < STAC_SEARCH_MAX_ATTEMPTS - 1:
+                    delay = STAC_SEARCH_RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 2)
+                    time.sleep(delay)
+        if last_exc is not None:
+            raise RuntimeError(
+                f"Could not search {product_code} scenes for {chunk_start} to {chunk_end} - "
+                f"DEA's STAC service failed on every attempt ({STAC_SEARCH_MAX_ATTEMPTS} tries, "
+                "with backoff). This is usually a temporary server-side issue (gateway timeout, "
+                "rate limiting) rather than a problem with your request - try running the "
+                "analysis again in a few minutes, or narrow the date range."
+            ) from last_exc
+    return all_items
+
+
 def run_site_analysis(
     site: SiteLayers,
     start_date: str,
@@ -268,9 +344,10 @@ def run_site_analysis(
     for product_code in products:
         product_mgr = RSDataProductManager(product_code, product_param_path=products_json_path)
 
-        if progress_cb:
-            progress_cb(0, 1, f"Searching {product_code} scenes...")
-        items = stac_mgr.get_stac_items(start_date, end_date, product_mgr, region_mgr)
+        items = _search_stac_items(
+            stac_mgr, start_date, end_date, product_mgr, region_mgr,
+            progress_cb=progress_cb, product_code=product_code,
+        )
         items = stac_mgr.filter_stac_items_eocloud(items, max_cloud)
         if not items:
             continue
@@ -472,7 +549,9 @@ def fetch_single_scene(
     # closely than a same-day-only search does.
     window_start = (date - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
     window_end = (date + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    items = stac_mgr.get_stac_items(window_start, window_end, product_mgr, region_mgr)
+    items = _search_stac_items(
+        stac_mgr, window_start, window_end, product_mgr, region_mgr, product_code=product_code,
+    )
     if not items:
         raise ValueError(f"No {sensor} scene found for {date_str} over this region.")
 
