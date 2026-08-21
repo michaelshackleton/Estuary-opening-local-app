@@ -47,7 +47,7 @@ if _VENDOR_DIR not in sys.path:
 from rs_data import STACDataManager  # noqa: E402
 from rs_processing import RSDataProductManager  # noqa: E402
 
-from . import connectivity  # noqa: E402
+from . import aggregate, connectivity  # noqa: E402
 from .region import SiteLayers  # noqa: E402
 
 ProgressCB = Optional[Callable[[int, int, str], None]]
@@ -334,6 +334,7 @@ def run_site_analysis(
     inside = site.inside_line(target_crs)
     outside = site.outside_line(target_crs)
     structures = site.structures_reprojected(target_crs)
+    sandbars = site.sandbars_reprojected(target_crs)
 
     region_mgr = InMemoryRegionManager(site.roi, region_name=site.name)
     work_dir = cache_dir or tempfile.mkdtemp(prefix="estuary_cache_")
@@ -425,7 +426,7 @@ def run_site_analysis(
 
             try:
                 result = connectivity.process_scene(
-                    bands, transform, inside, outside, structures, cloud_buffer_px=cloud_buffer_px,
+                    bands, transform, inside, outside, structures, sandbars, cloud_buffer_px=cloud_buffer_px,
                     clear_sky_reference=clear_sky_reference, temporal_anomaly_threshold=temporal_anomaly_threshold,
                 )
                 record = dict(
@@ -478,6 +479,96 @@ def run_site_analysis(
         records.extend(record for _, record in product_records.values())
 
     return records
+
+
+def run_batch_analysis(
+    sites: list[SiteLayers],
+    start_date: str,
+    end_date: str,
+    max_cloud: float,
+    products_json_path: str,
+    cache_dir: Optional[str] = None,
+    cache_rasters: bool = False,
+    products=DEFAULT_PRODUCTS,
+    min_roi_coverage: float = FULL_COVERAGE_THRESHOLD,
+    progress_cb: ProgressCB = None,
+    cloud_buffer_px: Optional[int | dict] = None,
+    enable_temporal_anomaly: bool = False,
+    temporal_anomaly_threshold: float = connectivity.DEFAULT_TEMPORAL_ANOMALY_THRESHOLD_DN,
+    temporal_anomaly_percentile: float = 10.0,
+    temporal_anomaly_min_obs: int = 3,
+) -> tuple[pd.DataFrame, dict[str, pd.DataFrame], dict[str, str]]:
+    """Runs run_site_analysis() once per site in `sites`, in order, so a
+    whole batch of sites can be fetched and analysed unattended rather than
+    one at a time through the UI. Every argument besides `sites` is passed
+    straight through to each site's own run_site_analysis() call - the same
+    date range, cloud threshold, and advanced settings apply to every site
+    in the batch.
+
+    Returns (combined_df, per_site_dfs, per_site_errors):
+      - combined_df: every site's result rows concatenated into one
+        DataFrame with a leading 'site' column, ready for a single
+        combined CSV download.
+      - per_site_dfs: {site_name: that site's own results DataFrame} -
+        ready for a per-site CSV zip download alongside the combined one.
+      - per_site_errors: {site_name: error message} for any site that
+        failed outright (e.g. no matching scenes, or a search that
+        exhausted its own retries - see fetch.py's _search_stac_items).
+        A failure on one site does not stop the batch; the remaining
+        sites still run, and this dict tells the caller which (if any)
+        need attention afterwards.
+
+    `progress_cb`, if given, is called with a message prefixed by which
+    site (and how many sites remain) it's currently working on, so a
+    single progress bar in the UI can show batch-wide progress rather than
+    just the current site's.
+    """
+    per_site_dfs: dict[str, pd.DataFrame] = {}
+    per_site_errors: dict[str, str] = {}
+    combined_frames: list[pd.DataFrame] = []
+
+    n_sites = len(sites)
+    for s_idx, site in enumerate(sites):
+        def site_progress_cb(done, total, message, _site=site, _idx=s_idx):
+            if progress_cb:
+                progress_cb(done, total, f"Site {_idx + 1}/{n_sites} ({_site.name}): {message}")
+
+        try:
+            records = run_site_analysis(
+                site=site,
+                start_date=start_date,
+                end_date=end_date,
+                max_cloud=max_cloud,
+                products_json_path=products_json_path,
+                cache_dir=cache_dir,
+                cache_rasters=cache_rasters,
+                products=products,
+                min_roi_coverage=min_roi_coverage,
+                progress_cb=site_progress_cb,
+                cloud_buffer_px=cloud_buffer_px,
+                enable_temporal_anomaly=enable_temporal_anomaly,
+                temporal_anomaly_threshold=temporal_anomaly_threshold,
+                temporal_anomaly_percentile=temporal_anomaly_percentile,
+                temporal_anomaly_min_obs=temporal_anomaly_min_obs,
+            )
+            # Dedupe Sentinel-2/Landsat on shared dates and drop error rows
+            # here, the same way the single-site "Run & results" tab does
+            # before ever showing/downloading anything - otherwise a date
+            # both sensors matched would be double-counted in any summary
+            # stats computed straight off this DataFrame.
+            site_df = aggregate.prefer_sentinel_on_shared_dates(aggregate.build_results_df(records))
+            if len(site_df) > 0:
+                site_df = site_df.copy()
+                site_df.insert(0, "site", site.name)
+            per_site_dfs[site.name] = site_df
+            combined_frames.append(site_df)
+        except Exception as e:
+            per_site_errors[site.name] = str(e)
+            if progress_cb:
+                progress_cb(0, 1, f"Site {s_idx + 1}/{n_sites} ({site.name}): FAILED - {e}")
+
+    combined_df = pd.concat(combined_frames, ignore_index=True) if combined_frames else pd.DataFrame()
+    return combined_df, per_site_dfs, per_site_errors
 
 
 def fetch_single_scene(
